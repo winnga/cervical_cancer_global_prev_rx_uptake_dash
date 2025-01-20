@@ -1,0 +1,651 @@
+---
+title: "Cervical cancer screening and treatment in globally in PEPFAR supported countries, 2018-2024"
+format: dashboard
+theme: lux
+---
+
+```{r}
+# Load packages 
+if(!require(pacman)) install.packages("pacman")
+pacman::p_load(tidyverse, outbreaks, bslib, bsicons, shiny, 
+               rgeoboundaries, plotly, htmltools, reactable,rnaturalearth,sf,geodata,countrycode)
+
+
+```
+```{r}
+
+# view data 
+cervical_cancer_analysis <- readxl::read_excel("Cervical_Cancer_Analysis.xlsx") %>% 
+  janitor::clean_names() 
+
+cervical_cancer_analysis[is.na(cervical_cancer_analysis)] <- 0
+
+cervical_cancer_analysis <- cervical_cancer_analysis %>% 
+   rename(
+    y20184 = x2018_quarter_4_results,
+    y20192 = x2019_quarter_2_results,
+    y20194 = x2019_quarter_4_results,
+    y20202 = x2020_quarter_2_results,
+    y20204 = x2020_quarter_4_results,
+    y20212 = x2021_quarter_2_results,
+    y20214 = x2021_quarter_4_results,
+    y20222 = x2022_quarter_2_results,
+    y20224 = x2022_quarter_4_results,
+    y20232 = x2023_quarter_2_results,
+    y20234 = x2023_quarter_4_results,
+    y20242 = x2024_quarter_2_results,
+    age = fine_age,
+    y20244 = x2024_quarter_4_results
+     ) %>% 
+  select(operating_unit,country,iso3,indicator,y20184,y20192,y20194,y20202,y20204,y20212,y20214,y20222,y20224,y20232,y20234,y20242,y20244,age)
+
+# Rename columns and reshape to long format
+cervical_cancer_analysis_long <- cervical_cancer_analysis %>%
+  pivot_longer(
+    cols = starts_with("y"), # Select all columns starting with "y"
+    names_to = c("year", "quarter"), # Split the column names into "year" and "quarter"
+    names_pattern = "y(\\d{4})(\\d)", # Extract year (4 digits) and quarter (1 digit)
+    values_to = "value" # Store the values in a new column called "value"
+  ) 
+
+# Group by relevant columns and calculate the sum for each group
+cervical_cancer_analysis_long_sum <- cervical_cancer_analysis_long %>%
+  group_by(operating_unit, country, iso3, indicator, age, year) %>%
+  summarize(
+    total_value = sum(value, na.rm = TRUE), # Sum the values for each group
+    .groups = "drop" # Drop the grouping structure after summarizing
+  )
+
+
+# Pivot the data to make indicators the columns
+cervical_cancer_analysis_wide <- cervical_cancer_analysis_long_sum %>%
+  pivot_wider(
+    names_from = indicator, # Use the `indicator` column to create new column names
+    values_from = total_value # Use the `total_value` column to fill the values
+  ) 
+
+# %>% 
+#    janitor::clean_names()
+
+cervical_cancer_analysis_wide <- cervical_cancer_analysis_wide %>%
+  mutate(
+    CXCA_SCRN = ifelse(CXCA_SCRN_POS > CXCA_SCRN, CXCA_SCRN_POS, CXCA_SCRN)
+  )
+
+cervical_cancer_analysis_wide <- cervical_cancer_analysis_wide %>%
+  mutate(
+    CXCA_SCRN_POS = ifelse(CXCA_TX > CXCA_SCRN_POS, CXCA_TX, CXCA_SCRN_POS)
+  )
+
+cervical_cancer_analysis_wide <-cervical_cancer_analysis_wide %>% 
+janitor::clean_names()
+
+cervical_cancer_analysis_clean <-cervical_cancer_analysis_wide %>% 
+  filter(!is.na(cxca_tx) | !is.na(cxca_scrn_pos) | !is.na(cxca_scrn))
+
+
+cervical_cancer_analysis_clean_screened <- cervical_cancer_analysis_clean %>%
+  summarize(
+    total_value = sum(cxca_scrn, na.rm = TRUE), # Sum the values for each group
+    .groups = "drop" # Drop the grouping structure after summarizing
+  )
+  
+
+cervical_cancer_analysis_clean_positive <- cervical_cancer_analysis_clean %>%
+  summarize(
+    total_value = sum(cxca_scrn_pos, na.rm = TRUE), # Sum the values for each group
+    .groups = "drop" # Drop the grouping structure after summarizing
+  )
+
+cervical_cancer_analysis_clean_positive_Rx <- cervical_cancer_analysis_clean %>%
+  summarize(
+    total_value = sum(cxca_tx, na.rm = TRUE), # Sum the values for each group
+    .groups = "drop" # Drop the grouping structure after summarizing
+  )
+
+
+ cervical_cancer_analysis_screen_clean <- cervical_cancer_analysis_clean %>% 
+   group_by(country, iso3) %>% 
+   summarize(
+    total_screen = sum(cxca_scrn, na.rm = TRUE), # Sum the values for each group
+    .groups = "drop" # Drop the grouping structure after summarizing
+  ) 
+ 
+  cervical_cancer_analysis_positive_clean <- cervical_cancer_analysis_clean %>% 
+   group_by(country, iso3) %>% 
+   summarize(
+    total_positive = sum(cxca_scrn_pos, na.rm = TRUE), # Sum the values for each group
+    .groups = "drop" # Drop the grouping structure after summarizing
+  )
+ 
+  
+  cervical_cancer_analysis_rx_clean <- cervical_cancer_analysis_clean %>% 
+   group_by(country, iso3) %>% 
+   summarize(
+    total_treatment = sum(cxca_tx, na.rm = TRUE), # Sum the values for each group
+    .groups = "drop" # Drop the grouping structure after summarizing
+  )
+  
+  
+ cervical_cancer_analysis_merge_clean <- cervical_cancer_analysis_screen_clean %>% 
+   left_join(cervical_cancer_analysis_positive_clean) %>% 
+   left_join(cervical_cancer_analysis_rx_clean)
+ 
+ 
+ cervical_cancer_analysis_merge_clean <- cervical_cancer_analysis_merge_clean %>%
+  mutate(
+    total_screen = ifelse(total_positive > total_screen, total_positive, total_screen)
+  )
+
+cervical_cancer_analysis_merge_clean <- cervical_cancer_analysis_merge_clean %>%
+  mutate(
+    total_positive = ifelse(total_treatment > total_positive, total_treatment, total_positive)
+  )
+
+
+ cervical_cancer_analysis_merge_clean <- cervical_cancer_analysis_merge_clean %>% 
+   mutate(screen_pos_pct=round(total_positive/total_screen*100,1),
+          rx_pos_pct=round(total_treatment/total_positive*100,1)
+          )
+ 
+cervical_cancer_analysis_merge_clean <- cervical_cancer_analysis_merge_clean %>% 
+  select(country,screen_pos_pct, rx_pos_pct)
+
+
+library(ggplot2)
+library(scales)  # For dual y-axis scaling
+library(plotly)  # For interactive tooltips
+
+# Define a scaling factor to adjust the secondary y-axis
+scaling_factor <- max(cervical_cancer_analysis_merge_clean$rx_pos_pct) / max(cervical_cancer_analysis_merge_clean$screen_pos_pct)
+
+# Create the combo graph without legends
+cervical_cancer_analysis_ggplot <- ggplot(cervical_cancer_analysis_merge_clean) +
+  # Bar graph for rx_pos_pct (primary y-axis)
+  geom_bar(
+    aes(x = country, y = rx_pos_pct, text = paste("Country: ", country, "<br>Treatment Uptake: ", rx_pos_pct, "%")), 
+    stat = "identity", 
+    position = "dodge", 
+    alpha = 0.7,
+    fill = "red"  # Set bar color to red
+  ) +
+  # Line graph for screen_pos_pct (secondary y-axis)
+  geom_line(
+    aes(x = country, y = screen_pos_pct * scaling_factor, group = 1, text = paste("Country: ", country, "<br>Cervical Cancer Prevalence: ", screen_pos_pct, "%")), 
+    size = 1.5,
+    color = "black",  # Set line color to black
+    linetype = "dashed"  # Set line type to dashed
+  ) +
+  # Points for screen_pos_pct (optional)
+  geom_point(
+    aes(x = country, y = screen_pos_pct * scaling_factor, text = paste("Country: ", country, "<br>Cervical Cancer Prevalence: ", screen_pos_pct, "%")), 
+    size = 3,
+    color = "black"  # Set point color to black
+  ) +
+  # Dual y-axis scaling
+  scale_y_continuous(
+    name = "Treatment uptake (Bar graph)", 
+    sec.axis = sec_axis(~ . / scaling_factor, name = "Cervical cancer prevalence (Line graph: n=10,560,673)")
+  ) +
+  labs(
+    x = "Country", 
+    y = "Percentage"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),  # Rotate x-axis labels for better readability
+    legend.position = "none"  # Remove all legends
+  )
+
+# Convert ggplot to plotly for interactive tooltips
+cervical_cancer_analysis_plotly <- ggplotly(cervical_cancer_analysis_ggplot, tooltip = "text")
+
+#Temporal trends
+ cervical_cancer_analysis_temporal_clean <- cervical_cancer_analysis_screen_clean %>% 
+   left_join(cervical_cancer_analysis_positive_clean) %>% 
+   left_join(cervical_cancer_analysis_rx_clean)
+ 
+ 
+ cervical_cancer_analysis_temporal_clean <- cervical_cancer_analysis_temporal_clean %>%
+  mutate(
+    total_screen = ifelse(total_positive > total_screen, total_positive, total_screen)
+  )
+
+cervical_cancer_analysis_temporal_clean <- cervical_cancer_analysis_temporal_clean %>%
+  mutate(
+    total_positive = ifelse(total_treatment > total_positive, total_treatment, total_positive)
+  )
+
+
+ cervical_cancer_analysis_temporal_annual_clean <- cervical_cancer_analysis_temporal_clean %>% 
+   mutate(screen_pos_pct=round(total_positive/total_screen*100,1),
+          rx_pos_pct=round(total_treatment/total_positive*100,1)
+          )
+
+
+countries_shape <- rnaturalearth::ne_countries()
+
+# ggplot(countries_shape) +
+#   geom_sf()
+
+#get country codes
+
+cervical_cancer_analysis_temporal_annual_clean <- cervical_cancer_analysis_temporal_annual_clean %>%
+  mutate(country_code=
+           countrycode(country,
+                       "country.name",
+                       "iso3c"))
+
+# setdiff(gapminder_2007$country_code,countries_shape$adm0_a3)
+xmerge=left_join(countries_shape, cervical_cancer_analysis_temporal_annual_clean, by = c("iso_a3" = "iso3"))
+ #setdiff(countries_shape$iso_a3,cervical_cancer_analysis_temporal_annual_clean$iso3)
+
+# Load required package
+library(DT)
+
+# Print the interactive table
+gap_map_ggplotly <- datatable(
+  cervical_cancer_analysis_temporal_annual_clean %>%
+    select(iso3, country, screen_pos_pct, rx_pos_pct),
+  colnames = c("ISO3", "Country", "Screen Positivity (%)", "Treatment Uptake (%)"
+               )
+)
+
+#Temporal trends
+cervical_cancer_analysis_screen_clean_temp <- cervical_cancer_analysis_clean %>% 
+  group_by(year) %>% 
+  summarize(
+    total_screen = sum(cxca_scrn, na.rm = TRUE), # Sum the values for each group
+    .groups = "drop" # Drop the grouping structure after summarizing
+  ) 
+
+cervical_cancer_analysis_positive_clean_temp <- cervical_cancer_analysis_clean %>% 
+  group_by(year) %>% 
+  summarize(
+    total_positive = sum(cxca_scrn_pos, na.rm = TRUE), # Sum the values for each group
+    .groups = "drop" # Drop the grouping structure after summarizing
+  )
+
+
+cervical_cancer_analysis_rx_clean_temp <- cervical_cancer_analysis_clean %>% 
+  group_by(year) %>% 
+  summarize(
+    total_treatment = sum(cxca_tx, na.rm = TRUE), # Sum the values for each group
+    .groups = "drop" # Drop the grouping structure after summarizing
+  )
+
+
+cervical_cancer_analysis_merge_clean_temp <- cervical_cancer_analysis_screen_clean_temp %>% 
+  left_join(cervical_cancer_analysis_positive_clean_temp) %>% 
+  left_join(cervical_cancer_analysis_rx_clean_temp)
+
+cervical_cancer_analysis_merge_clean_temp <- cervical_cancer_analysis_merge_clean_temp %>%
+  mutate(
+    total_screen = ifelse(total_positive > total_screen, total_positive, total_screen)
+  )
+
+cervical_cancer_analysis_merge_clean_temp <- cervical_cancer_analysis_merge_clean_temp %>%
+  mutate(
+    total_positive = ifelse(total_treatment > total_positive, total_treatment, total_positive)
+  )
+
+
+cervical_cancer_analysis_merge_clean_temp <- cervical_cancer_analysis_merge_clean_temp %>% 
+  mutate(screen_pos_pct=round(total_positive/total_screen*100,1),
+         rx_pos_pct=round(total_treatment/total_positive*100,1)
+  )
+
+line_graph <- ggplot(cervical_cancer_analysis_merge_clean_temp, aes(x = year)) +
+    # Line for cervical cancer prevalence (screen_pos_pct)
+    geom_line(
+        aes(y = screen_pos_pct, color = "Cervical cancer prevalence", group = 1), 
+        size = 1.5, 
+        linetype = "solid"
+    ) +
+    # Add a smoothing line with confidence interval
+    geom_smooth(
+        aes(y = screen_pos_pct, color = "Cervical cancer prevalence", group = 1),
+        method = "loess",  # LOESS smoothing for curvilinear trend
+        se = TRUE,         # Enable confidence interval
+        size = 1,          # Thickness of the smoothing line
+        linetype = "dashed" # Dashed line for distinction
+    ) +
+    # Add axis titles
+    labs(
+        x = "Year", 
+        y = "CVD prevelance (%)"        ,
+        title = "Trend of prevalence over time"
+    ) +
+    theme_minimal() +
+    theme(
+        axis.text.x = element_text(angle = 45, hjust = 1),  # Rotate x-axis labels for better readability
+        legend.position = "none"  # Remove legend
+    )
+
+line_graph_plotly <- ggplotly(line_graph)
+
+
+line_graph_treatment <- ggplot(cervical_cancer_analysis_merge_clean_temp, aes(x = year)) +
+    # Line for treatment uptake (rx_pos_pct)
+    geom_line(
+        aes(y = rx_pos_pct, color = "Treatment uptake", group = 1), 
+        size = 1.5, 
+        linetype = "solid"
+    ) +
+    # Add a smoothing line with confidence interval for treatment uptake
+    geom_smooth(
+        aes(y = rx_pos_pct, color = "Treatment uptake", group = 1),
+        method = "loess",  # LOESS smoothing for curvilinear trend
+        se = TRUE,         # Enable confidence interval
+        size = 1,          # Thickness of the smoothing line
+        linetype = "dashed" # Dashed line for distinction
+    ) +
+    # Add axis titles and update labels
+    labs(
+        x = "Year", 
+        y = "Treatment uptake (%)",
+        title = "Trend of treatment uptake over time" 
+    ) +
+    # Set y-axis to start at 0
+    scale_y_continuous(limits = c(0, NA), expand = c(0, 0)) + 
+    theme_minimal() +
+    theme(
+        axis.text.x = element_text(angle = 45, hjust = 1),  # Rotate x-axis labels for better readability
+        legend.position = "none"  # Remove legend
+    )
+
+# Convert to an interactive plot using Plotly
+library(plotly)
+interactive_line_graph_treatment <- ggplotly(line_graph_treatment)
+
+
+#Spatial and temporal trends
+cervical_cancer_analysis_ST_clean <- cervical_cancer_analysis_clean %>% 
+  group_by(country, year,iso3) %>% 
+  summarize(
+    total_treatment = sum(cxca_tx, na.rm = TRUE), # Sum the values for each group
+    .groups = "drop" # Drop the grouping structure after summarizing
+  )
+
+cervical_cancer_analysis_screen_ST_clean <- cervical_cancer_analysis_clean %>% 
+  group_by(country, year,iso3) %>% 
+  summarize(
+    total_screen = sum(cxca_scrn, na.rm = TRUE), # Sum the values for each group
+    .groups = "drop" # Drop the grouping structure after summarizing
+  ) 
+
+cervical_cancer_analysis_positive_ST_clean <- cervical_cancer_analysis_clean %>% 
+  group_by(country, year,iso3) %>% 
+  summarize(
+    total_positive = sum(cxca_scrn_pos, na.rm = TRUE), # Sum the values for each group
+    .groups = "drop" # Drop the grouping structure after summarizing
+  )
+
+
+# # Produce a static table with knitr::kable
+# library(knitr)
+# cervical_cancer_analysis_merge_ST_clean %>%
+#   kable(
+#     col.names = c("ISO3", "Country", "Year", "Screen Positivity (%)", "Treatment Uptake (%)"),
+#     caption = "Table of Countries with Screen Positivity and Treatment Uptake by Year (No Missing Values)"
+#   )
+
+# Produce an interactive table with DT::datatable
+
+
+cervical_cancer_analysis_merge_ST_clean <- cervical_cancer_analysis_ST_clean %>% 
+  left_join(cervical_cancer_analysis_screen_ST_clean,by=c("country","year")) %>% 
+  left_join(cervical_cancer_analysis_positive_ST_clean,by=c("country","year"))
+
+
+cervical_cancer_analysis_merge_ST_clean <- cervical_cancer_analysis_merge_ST_clean %>%
+  mutate(
+    total_screen = ifelse(total_positive > total_screen, total_positive, total_screen)
+  )
+
+cervical_cancer_analysis_merge_ST_clean <- cervical_cancer_analysis_merge_ST_clean %>%
+  mutate(
+    total_positive = ifelse(total_treatment > total_positive, total_treatment, total_positive)
+  )
+
+
+cervical_cancer_analysis_merge_ST_clean <- cervical_cancer_analysis_merge_ST_clean %>% 
+  mutate(screen_pos_pct=round(total_positive/total_screen*100,1),
+         rx_pos_pct=round(total_treatment/total_positive*100,1)
+  )
+
+cervical_cancer_analysis_merge_ST_clean <- cervical_cancer_analysis_merge_ST_clean %>% 
+  select(iso3, country,year, screen_pos_pct, rx_pos_pct)
+
+# Load necessary libraries
+library(plotly)
+library(dplyr)
+
+# Filter rows where screen_pos_pct and rx_pos_pct are not NA
+cervical_cancer_analysis_merge_ST_clean <- cervical_cancer_analysis_merge_ST_clean %>%
+  filter(!is.na(screen_pos_pct) & !is.na(rx_pos_pct))
+
+# Create unique year options for dropdown filtering
+years <- unique(cervical_cancer_analysis_merge_ST_clean$year)
+
+
+# Print the interactive table with Year included
+gap_map_ggplotly <- datatable(
+  cervical_cancer_analysis_merge_ST_clean %>%
+    select(iso3, country, year, screen_pos_pct, rx_pos_pct),
+  colnames = c("ISO3", "Country", "Year", "Screen Positivity (%)", "Treatment Uptake (%)"
+               )
+)
+
+
+cervical_cancer_analysis_clean[cervical_cancer_analysis_clean=="50-54"] <-"50+"
+cervical_cancer_analysis_clean[cervical_cancer_analysis_clean=="55-59"] <-"50+"
+cervical_cancer_analysis_clean[cervical_cancer_analysis_clean=="60-64"] <-"50+"
+cervical_cancer_analysis_clean[cervical_cancer_analysis_clean=="65+"] <-"50+"
+cervical_cancer_analysis_clean[cervical_cancer_analysis_clean=="Unknown Age"] <-"50+"
+
+
+cervical_cancer_analysis_age_clean <- cervical_cancer_analysis_clean %>% 
+  group_by(age) %>% 
+  summarize(
+    total_treatment = sum(cxca_tx, na.rm = TRUE), # Sum the values for each group
+    .groups = "drop" # Drop the grouping structure after summarizing
+  )
+
+cervical_cancer_analysis_screen_age_clean <- cervical_cancer_analysis_clean %>% 
+  group_by(age) %>% 
+  summarize(
+    total_screen = sum(cxca_scrn, na.rm = TRUE), # Sum the values for each group
+    .groups = "drop" # Drop the grouping structure after summarizing
+  ) 
+
+cervical_cancer_analysis_positive_age_clean <- cervical_cancer_analysis_clean %>% 
+  group_by(age) %>% 
+  summarize(
+    total_positive = sum(cxca_scrn_pos, na.rm = TRUE), # Sum the values for each group
+    .groups = "drop" # Drop the grouping structure after summarizing
+  )
+
+
+
+cervical_cancer_analysis_merge_age_clean <- cervical_cancer_analysis_age_clean %>% 
+  left_join(cervical_cancer_analysis_screen_age_clean) %>% 
+  left_join(cervical_cancer_analysis_positive_age_clean)
+
+
+cervical_cancer_analysis_merge_age_clean <- cervical_cancer_analysis_merge_age_clean %>%
+  mutate(
+    total_screen = ifelse(total_positive > total_screen, total_positive, total_screen)
+  )
+
+cervical_cancer_analysis_merge_age_clean <- cervical_cancer_analysis_merge_age_clean %>%
+  mutate(
+    total_positive = ifelse(total_treatment > total_positive, total_treatment, total_positive)
+  )
+
+
+cervical_cancer_analysis_merge_age_clean <- cervical_cancer_analysis_merge_age_clean %>% 
+  mutate(screen_pos_pct=round(total_positive/total_screen*100,1),
+         rx_pos_pct=round(total_treatment/total_positive*100,1)
+  )
+
+cervical_cancer_analysis_merge_age_clean <- cervical_cancer_analysis_merge_age_clean %>% 
+  select(age, screen_pos_pct, rx_pos_pct)
+
+line_age_graph <- ggplot(cervical_cancer_analysis_merge_age_clean, aes(x = age)) +
+  # Line for cervical cancer prevalence (screen_pos_pct)
+  geom_line(
+    aes(y = screen_pos_pct, color = "Cervical cancer prevalence", group = 1), 
+    size = 1.5, 
+    linetype = "solid"
+  ) +
+  # Add a smoothing line with confidence interval
+  geom_smooth(
+    aes(y = screen_pos_pct, color = "Cervical cancer prevalence", group = 1),
+    method = "loess",  # LOESS smoothing for curvilinear trend
+    se = TRUE,         # Enable confidence interval
+    size = 1,          # Thickness of the smoothing line
+    linetype = "dashed" # Dashed line for distinction
+  ) +
+  # Add axis titles
+  labs(
+    x = "Age", 
+    y = "CVD prevelance (%)"        ,
+    title = "Trend of prevalence by age"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),  # Rotate x-axis labels for better readability
+    legend.position = "none"  # Remove legend
+  )
+
+line_age_graph_plotly <- ggplotly(line_age_graph)
+
+
+
+line_graph_age_treatment <- ggplot(cervical_cancer_analysis_merge_age_clean, aes(x = age)) +
+  # Line for treatment uptake (rx_pos_pct)
+  geom_line(
+    aes(y = rx_pos_pct, color = "Treatment uptake", group = 1), 
+    size = 1.5, 
+    linetype = "solid"
+  ) +
+  # Add a smoothing line with confidence interval for treatment uptake
+  geom_smooth(
+    aes(y = rx_pos_pct, color = "Treatment uptake", group = 1),
+    method = "loess",  # LOESS smoothing for curvilinear trend
+    se = TRUE,         # Enable confidence interval
+    size = 1,          # Thickness of the smoothing line
+    linetype = "dashed" # Dashed line for distinction
+  ) +
+  # Add axis titles and update labels
+  labs(
+    x = "Age", 
+    y = "Treatment uptake (%)",
+    title = "Trend of treatment uptake by age" 
+  ) +
+  # Set y-axis to start at 0
+  scale_y_continuous(limits = c(0, NA), expand = c(0, 0)) + 
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),  # Rotate x-axis labels for better readability
+    legend.position = "none"  # Remove legend
+  )
+
+# Convert to an interactive plot using Plotly
+library(plotly)
+interactive_line_graph_age_treatment <- ggplotly(line_graph_age_treatment)
+
+
+
+```
+
+# HOME 
+## Row 1 {height=20%}
+
+```{r}
+value_box(
+  title = "Women screened",
+  value = cervical_cancer_analysis_clean_screened,
+  showcase = bsicons::bs_icon("gender-female"),
+  theme = value_box_theme(bg = "#010324")
+  )
+```
+
+```{r}
+value_box(
+  title = "Cervical cancer positive",
+  value = cervical_cancer_analysis_clean_positive,
+  showcase = bsicons::bs_icon("prescription2"),
+  theme = value_box_theme(bg = "#eb3449", fg = "#000000")  # Set fg to white
+)
+```
+
+```{r}
+value_box(
+  title = "Cervical cancer treatment",
+  value = cervical_cancer_analysis_clean_positive_Rx,
+  showcase = bsicons::bs_icon("prescription"),
+  theme = value_box_theme(bg = "#34ebdb", fg = "#000000")
+)
+```
+
+## Row 2 {height=40%}
+
+### {width=50%}
+```{r title="Cervical cancer prevalence temporal trends"}
+line_graph_plotly
+```
+### {width=50%}
+```{r title="Temporal trends in cervical cancer treatment uptake"}
+interactive_line_graph_treatment
+```
+
+# Spatial trends in cervical cancer prevalence and treatment uptake 
+## Row 1 {height=100%}
+```{r title="Spatial trends in cervical cancer prevalence and treatment uptake"}
+gap_map_ggplotly
+```
+
+# Spatial-temporal trends in cervical cancer prevalence and treatment uptake 
+## Row 1 {height=100%}
+```{r title="Spatial-temporal trends in cervical cancer prevalence"}
+gap_map_ggplotly
+```
+
+# Age patterns of prevalence and treatment uptake
+## Row 1 {height=100%}
+### {width=50%}
+```{r title="Age patterns of cervical cancer prevalence"}
+line_age_graph_plotly
+```
+### {width=50%}
+```{r title="Age patterns of cervical cancer treatment uptake"}
+interactive_line_graph_age_treatment
+```
+
+
+# DOWNLOAD DATA
+
+The data used in this analysis can be accessed below:
+```{r}
+library(htmltools)
+
+htmltools::browsable(
+  tagList(
+    reactable(cervical_cancer_analysis, 
+              elementId = "cervical_cancer_analysis-table", 
+              searchable = T, 
+              filterable = T), 
+    
+tags$button("Download as CSV", 
+            onclick = "Reactable.downloadDataCSV('cervical_cancer_analysis-table')")
+  )
+)
+
+```
+
+
+# ABOUT
+
+Bi-annual Results by Operating Unit (OU) and Fine Age for Fiscal Years 2018-2024 and the following Cervical Cancer indicators: CXCA_SCRN (Number of HIV-positive women on Antiretroviral Therapy (ART) screened for cervical cancer), CXCA_SCRN_POS (Number of HIV-positive women on Antiretroviral Therapy (ART) who screened positive for cervical cancer), and CXCA_TX (Number of cervical cancer screen-positive women who are HIV-positive and on Antiretroviral Therapy (ART) and received precancerous cervical cancer treatment). The data can be accessed from https://s3.amazonaws.com/media.data.pepfar.gov/mer_downloadables/Cervical_Cancer_Analysis.zip.
