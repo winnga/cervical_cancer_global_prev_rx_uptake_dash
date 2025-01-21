@@ -244,7 +244,7 @@ xmerge=left_join(countries_shape, cervical_cancer_analysis_temporal_annual_clean
 library(DT)
 
 # Print the interactive table
-gap_map_ggplotly <- datatable(
+gap_map_ggplotly1 <- datatable(
   cervical_cancer_analysis_temporal_annual_clean %>%
     select(iso3, country, screen_pos_pct, rx_pos_pct),
   colnames = c("ISO3", "Country", "Screen Positivity (%)", "Treatment Uptake (%)"
@@ -604,7 +604,7 @@ interactive_line_graph_treatment
 # Spatial trends in cervical cancer prevalence and treatment uptake 
 ## Row 1 {height=100%}
 ```{r title="Spatial trends in cervical cancer prevalence and treatment uptake"}
-gap_map_ggplotly
+gap_map_ggplotly1
 ```
 
 # Spatial-temporal trends in cervical cancer prevalence and treatment uptake 
